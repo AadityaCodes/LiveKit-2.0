@@ -8,7 +8,9 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     JobProcess,
+    RunContext,
     cli,
+    function_tool,
     inference,
     room_io,
 )
@@ -20,9 +22,57 @@ logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
 
+@function_tool
+async def collect_customer_information(
+    context: RunContext,
+    first_name: str,
+    last_name: str,
+    age: int,
+    date_of_birth: str,
+    security_question: str,
+    security_answer: str,
+) -> str:
+    """Collect identity and verification details from the customer for banking access.
+
+    Ask the user, one question at a time, for each of the following items before
+    calling this tool. Confirm each answer back to the user before moving on:
+
+    1. Their first name
+    2. Their last name
+    3. Their current age
+    4. Their date of birth (spoken naturally, e.g. "March fifth, nineteen ninety")
+    5. A security question they would like on file (e.g. "What is your mother's maiden name?")
+    6. The answer to that security question
+
+    Only call this tool once you have collected all six values from the user.
+
+    Args:
+        first_name: The customer's given (first) name.
+        last_name: The customer's family (last) name.
+        age: The customer's age in years.
+        date_of_birth: The customer's date of birth as the user stated it.
+        security_question: The security question the user chose.
+        security_answer: The user's answer to their chosen security question.
+    """
+    logger.info(
+        "collected customer information for %s %s (age %d)",
+        first_name,
+        last_name,
+        age,
+    )
+    return (
+        f"Recorded customer profile for {first_name} {last_name}. "
+        "Confirm the details back to the user and let them know they are verified."
+    )
+
+
+banking_tools = [collect_customer_information]
+
+
 class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(
+            tools=banking_tools,
             # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
             # See all available models at https://docs.livekit.io/agents/models/llm/
             llm=inference.LLM(model="openai/gpt-5.2-chat-latest"),
