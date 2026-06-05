@@ -30,14 +30,32 @@ async def receptionist(context: RunContext) -> str:
     """Phase 1: greet the caller and identify their goal.
 
     Call this tool exactly once, at the very start of every call, before doing
-    anything else. The tool returns the exact greeting the agent should speak.
+    anything else. The tool returns the exact greeting the agent must speak
+    verbatim.
 
-    After speaking the greeting, listen to the caller's response. If they want
-    to open a new bank account, move on to collecting their information. If
-    they want something else, answer general questions or offer to transfer
-    them to a human agent.
+    After speaking the greeting, listen to the caller's response. If they
+    confirm they want to open a new bank account, proceed to data collection.
+    For any other request, call `decline_out_of_scope_request`.
     """
-    return "Thank you for calling. What can I help you with today?"
+    return "Thank you for calling ABC Bank, what can I help you with today?"
+
+
+@function_tool
+async def decline_out_of_scope_request(context: RunContext) -> str:
+    """Politely decline a request that is not opening a new bank account.
+
+    Call this tool whenever the caller asks for any service other than opening
+    a new bank account. The tool returns the exact response the agent must
+    speak verbatim. After speaking it, wait for the caller's reply; if they
+    then want to open an account, proceed to data collection, otherwise end
+    the call politely.
+    """
+    return (
+        "Unfortunately, as a voice agent, I cannot assist you with such "
+        "services. As of now, I am only capable of handling the service of "
+        "opening a bank account. For any other services, please go to the "
+        "branch in person. Is there anything else I can help you with today?"
+    )
 
 
 @function_tool
@@ -153,7 +171,12 @@ async def send_next_steps_email(
     )
 
 
-banking_tools = [receptionist, collect_customer_information, send_next_steps_email]
+banking_tools = [
+    receptionist,
+    decline_out_of_scope_request,
+    collect_customer_information,
+    send_next_steps_email,
+]
 
 
 class Assistant(Agent):
@@ -191,7 +214,8 @@ class Assistant(Agent):
 
                 ## Phase 1 - Initial greeting & goal identification
                 - Call the `receptionist` tool exactly once at the very start of the call and speak the greeting it returns verbatim.
-                - Listen for the caller's goal. If they want to open a new account, proceed to Phase 2. Otherwise, answer general questions or offer to transfer them to a human agent.
+                - Listen for the caller's goal. If they confirm they want to open a new bank account, proceed to Phase 2.
+                - For ANY other request (loans, card support, balance inquiries, transfers, complaints, branch hours, etc.), call `decline_out_of_scope_request` and speak its response verbatim. Then wait for the caller's reply: if they now want to open an account, proceed to Phase 2; otherwise thank them and end the call.
 
                 ## Phase 2 - Data collection (receptionist role)
                 Collect all ten data points below from the conversation, one at a time, confirming each value back to the user before moving on:
