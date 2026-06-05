@@ -5,41 +5,56 @@ from email.message import EmailMessage
 
 logger = logging.getLogger("email_dispatch")
 
-NEXT_STEPS_SUBJECT = "Next Steps to Open Your Account"
-NEXT_STEPS_BODY_TEMPLATE = """\
+WELCOME_SUBJECT = "Your new ABC Bank checking account is open"
+WELCOME_BODY_TEMPLATE = """\
 Hi {first_name},
 
-Thank you for starting your new account application with us. To finalize your
-account opening, please have the following documents ready for verification:
+Welcome to ABC Bank! Your new checking account is officially open. Here are
+your account details:
 
-  1. A government-issued photo ID (passport, driver's license, or national ID)
-  2. Proof of residential address (utility bill or lease agreement from the
-     last 90 days)
-  3. Proof of employment or income (recent pay stub, employment letter, or
-     tax return)
-  4. Your identification number on file for cross-reference
+  Account Number: {account_number}
+  Routing Number: {routing_number}
 
-A member of our verification team will reach out within one to two business
-days to confirm receipt of these documents and complete your onboarding.
+Next steps to set up your online banking:
 
-If you have any questions in the meantime, simply reply to this email.
+  1. Visit abcbank.example.com and click "Enroll in Online Banking".
+  2. Verify your identity using the account number above and the last four
+     digits of your identification number on file.
+  3. Create a username and password, then set up multi-factor authentication.
+  4. Download the ABC Bank mobile app from your app store and sign in with
+     your new credentials.
+
+A welcome packet with your debit card and checks will arrive at your
+residential address within 7 to 10 business days.
+
+If you have any questions, simply reply to this email or call us back.
 
 Warm regards,
-The Onboarding Team
+The ABC Bank Onboarding Team
 """
 
 
-def send_next_steps_email(*, to_email: str, first_name: str) -> str:
-    """Send the standardized 'Next Steps' onboarding email.
+def send_welcome_email(
+    *,
+    to_email: str,
+    first_name: str,
+    account_number: str,
+    routing_number: str,
+) -> str:
+    """Send the welcome email with newly provisioned account details.
 
     Uses SMTP if SMTP_HOST is configured; otherwise logs the email and
-    returns a 'logged' status so the workflow can continue in dev environments.
+    returns a 'logged' status so the workflow can complete in dev.
     """
-    body = NEXT_STEPS_BODY_TEMPLATE.format(first_name=first_name)
+    body = WELCOME_BODY_TEMPLATE.format(
+        first_name=first_name,
+        account_number=account_number,
+        routing_number=routing_number,
+    )
     host = os.getenv("SMTP_HOST")
     if not host:
         logger.info(
-            "SMTP not configured; would send next-steps email to %s\n%s",
+            "SMTP not configured; would send welcome email to %s\n%s",
             to_email,
             body,
         )
@@ -48,10 +63,10 @@ def send_next_steps_email(*, to_email: str, first_name: str) -> str:
     port = int(os.getenv("SMTP_PORT", "587"))
     user = os.getenv("SMTP_USER")
     password = os.getenv("SMTP_PASSWORD")
-    sender = os.getenv("SMTP_FROM", user or "noreply@example.com")
+    sender = os.getenv("SMTP_FROM", user or "noreply@abcbank.example.com")
 
     msg = EmailMessage()
-    msg["Subject"] = NEXT_STEPS_SUBJECT
+    msg["Subject"] = WELCOME_SUBJECT
     msg["From"] = sender
     msg["To"] = to_email
     msg.set_content(body)

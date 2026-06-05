@@ -17,8 +17,9 @@ from livekit.agents import (
 from livekit.plugins import ai_coustics, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-from database import save_pending_account
-from email_dispatch import send_next_steps_email as dispatch_next_steps_email
+from core_banking import create_bank_account
+from database import save_pending_customer
+from email_dispatch import send_welcome_email as dispatch_welcome_email
 
 logger = logging.getLogger("agent")
 
@@ -40,12 +41,10 @@ async def collect_customer_information(
     employment_status: str,
     confirmed_goal: str,
 ) -> str:
-    """Phase 3: persist a verified account-opening application to the database.
+    """Phase 4 - Database Storage: persist a verified pending customer.
 
-    Ask the user, one question at a time, for each of the following items
-    before calling this tool. Confirm each answer back to the user before
-    moving on. Do not call this tool until every field has been collected
-    and confirmed:
+    Do not call this tool until every field below has been collected and
+    confirmed with the user, AND consent has been obtained in Phase 2.
 
     1. First name
     2. Last name
@@ -58,12 +57,14 @@ async def collect_customer_information(
     9. Citizenship status
     10. Employment status
 
-    The `confirmed_goal` argument should be set to "account_opening" once the
-    user has confirmed they want to open a new bank account.
+    Set `confirmed_goal` to "account_opening" once the user has confirmed
+    they want to open a new bank account.
 
-    If the insertion fails, apologize, briefly tell the user there was a system
-    issue, and call this tool again to retry. On success, move on to dispatching
-    the next-steps email.
+    On success the tool returns a `customer_id`; remember it and pass it to
+    `provision_bank_account` in Phase 5.
+
+    If the tool returns an ERROR, apologize, tell the user there was a system
+    issue, and call this tool again to retry.
 
     Args:
         first_name: The customer's given (first) name.
@@ -74,16 +75,12 @@ async def collect_customer_information(
         date_of_birth: The customer's date of birth as the user stated it.
         phone_number: The customer's contact phone number.
         email: The customer's contact email address.
-        citizenship_status: The customer's citizenship status (e.g. "US citizen",
-            "permanent resident", "non-resident").
-        employment_status: The customer's employment status (e.g. "employed",
-            "self-employed", "unemployed", "retired", "student").
-        confirmed_goal: The confirmed reason for the call. Use
-            "account_opening" once the user has confirmed they want a new
-            account.
+        citizenship_status: The customer's citizenship status.
+        employment_status: The customer's employment status.
+        confirmed_goal: Use "account_opening" once confirmed.
     """
     try:
-        record_id = save_pending_account(
+        customer_id = save_pending_customer(
             first_name=first_name,
             last_name=last_name,
             age=age,
@@ -97,48 +94,100 @@ async def collect_customer_information(
             confirmed_goal=confirmed_goal,
         )
     except Exception as exc:
-        logger.exception("failed to save pending account")
+        logger.exception("failed to save pending customer")
         return (
             "ERROR: database insertion failed. Apologize, tell the user there "
             f"was a system issue ({exc}), and retry this tool."
         )
 
     logger.info(
-        "stored pending account %s %s as record %d", first_name, last_name, record_id
+        "stored pending customer %s %s as id %d", first_name, last_name, customer_id
     )
     return (
-        f"OK: pending account saved for {first_name} {last_name} "
-        f"(record id {record_id}). Next, call send_next_steps_email."
+        f"OK: pending customer saved (customer_id={customer_id}). "
+        "Next, call provision_bank_account with this customer_id."
     )
 
 
 @function_tool
-async def send_next_steps_email(
-    context: RunContext, to_email: str, first_name: str
-) -> str:
-    """Phase 4: dispatch the standardized 'Next Steps' onboarding email.
+async def provision_bank_account(context: RunContext, customer_id: int) -> str:
+    """Phase 5 - Account Provisioning: create the customer's bank account.
 
-    Call this tool immediately after collect_customer_information succeeds.
-    Use the email address and first name the customer provided.
+    Call this tool immediately after `collect_customer_information` succeeds,
+    passing the `customer_id` it returned. The tool calls the Core Banking
+    API's Create_Bank_Account function, which generates a unique account
+    number and links it (plus the bank's routing number) to the profile.
+
+    The tool returns the new `account_number` and `routing_number`. Remember
+    them and pass them to `send_welcome_email` in Phase 6. Do not read these
+    numbers back to the user; the welcome email is the official record.
 
     Args:
-        to_email: The customer's email address (as previously collected).
-        first_name: The customer's first name (as previously collected).
+        customer_id: The id returned by collect_customer_information.
     """
     try:
-        status = dispatch_next_steps_email(to_email=to_email, first_name=first_name)
+        result = create_bank_account(customer_id)
     except Exception as exc:
-        logger.exception("failed to send next-steps email")
-        return f"ERROR: email dispatch failed ({exc}). Inform the user."
+        logger.exception("failed to provision account for customer %d", customer_id)
+        return (
+            "ERROR: account provisioning failed. Apologize to the user, "
+            f"explain there was a system issue ({exc}), and retry this tool."
+        )
 
-    logger.info("next-steps email %s to %s", status, to_email)
+    logger.info(
+        "provisioned account %s for customer %d", result["account_number"], customer_id
+    )
     return (
-        f"OK: next-steps email {status} to {to_email}. Now move to the final "
-        "confirmation phase and speak the closing statement."
+        "OK: account provisioned. "
+        f"account_number={result['account_number']} "
+        f"routing_number={result['routing_number']}. "
+        "Next, call send_welcome_email with these values."
     )
 
 
-banking_tools = [collect_customer_information, send_next_steps_email]
+@function_tool
+async def send_welcome_email(
+    context: RunContext,
+    to_email: str,
+    first_name: str,
+    account_number: str,
+    routing_number: str,
+) -> str:
+    """Phase 6 - Welcome Dispatch: email the new account details to the user.
+
+    Call this tool immediately after `provision_bank_account` succeeds, using
+    the `account_number` and `routing_number` it returned and the email and
+    first name collected in Phase 3.
+
+    Args:
+        to_email: The customer's email address (from Phase 3).
+        first_name: The customer's first name (from Phase 3).
+        account_number: From provision_bank_account.
+        routing_number: From provision_bank_account.
+    """
+    try:
+        status = dispatch_welcome_email(
+            to_email=to_email,
+            first_name=first_name,
+            account_number=account_number,
+            routing_number=routing_number,
+        )
+    except Exception as exc:
+        logger.exception("failed to send welcome email")
+        return f"ERROR: email dispatch failed ({exc}). Inform the user."
+
+    logger.info("welcome email %s to %s", status, to_email)
+    return (
+        f"OK: welcome email {status} to {to_email}. Now move to Phase 7 "
+        "and speak the final confirmation script verbatim."
+    )
+
+
+banking_tools = [
+    collect_customer_information,
+    provision_bank_account,
+    send_welcome_email,
+]
 
 
 class Assistant(Agent):
@@ -210,13 +259,13 @@ class Assistant(Agent):
                 Validation gate: continuously check your context memory. If any field is missing or unclear, loop back and ask a targeted follow-up question. Do not proceed to Phase 4 until all ten points are securely captured and confirmed.
 
                 ## Phase 4 - Database Storage (tool execution)
-                Once all ten fields are confirmed, call `collect_customer_information` with the collected values and `confirmed_goal="account_opening"`. If the tool returns an error, briefly apologize, tell the user there was a system issue, and call the tool again to retry. On success, proceed to Phase 6.
+                Once all ten fields are confirmed AND consent has been given in Phase 2, call `collect_customer_information` with the collected values and `confirmed_goal="account_opening"`. The tool returns a `customer_id`; remember it. If the tool returns an error, briefly apologize, tell the user there was a system issue, and call the tool again to retry. On success, proceed to Phase 5.
 
                 ## Phase 5 - Account Provisioning (tool execution)
-                Not yet available in this release. Skip directly to Phase 6.
+                Immediately call `provision_bank_account` with the `customer_id` from Phase 4. The Core Banking API generates a unique account number and routing number. Remember both values; do NOT read them back to the user. If the tool returns an error, apologize and retry. On success, proceed to Phase 6.
 
                 ## Phase 6 - Welcome Dispatch (tool execution)
-                Immediately call `send_next_steps_email` with the user's email and first name. If it returns an error, tell the user the email could not be sent and offer to try again.
+                Immediately call `send_welcome_email` with the user's email and first name from Phase 3 and the `account_number` and `routing_number` from Phase 5. If the tool returns an error, tell the user the email could not be sent and offer to try again. On success, proceed to Phase 7.
 
                 ## Phase 7 - Final Confirmation (receptionist)
                 Speak this closing statement verbatim:
