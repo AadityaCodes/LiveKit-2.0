@@ -20,7 +20,7 @@ def init_db() -> None:
     with _connect() as conn:
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS customers (
+            CREATE TABLE IF NOT EXISTS pending_accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 first_name TEXT NOT NULL,
                 last_name TEXT NOT NULL,
@@ -32,13 +32,14 @@ def init_db() -> None:
                 email TEXT NOT NULL,
                 citizenship_status TEXT NOT NULL,
                 employment_status TEXT NOT NULL,
+                confirmed_goal TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
 
 
-def save_customer(
+def save_pending_account(
     *,
     first_name: str,
     last_name: str,
@@ -50,16 +51,17 @@ def save_customer(
     email: str,
     citizenship_status: str,
     employment_status: str,
+    confirmed_goal: str,
 ) -> int:
     init_db()
     with _connect() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO customers (
+            INSERT INTO pending_accounts (
                 first_name, last_name, age, residential_address,
                 identification_number, date_of_birth, phone_number, email,
-                citizenship_status, employment_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                citizenship_status, employment_status, confirmed_goal
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 first_name,
@@ -72,6 +74,7 @@ def save_customer(
                 email,
                 citizenship_status,
                 employment_status,
+                confirmed_goal,
             ),
         )
         return cursor.lastrowid

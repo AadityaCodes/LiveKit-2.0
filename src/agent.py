@@ -17,7 +17,8 @@ from livekit.agents import (
 from livekit.plugins import ai_coustics, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-from database import save_customer
+from database import save_pending_account
+from email_dispatch import send_next_steps_email as dispatch_next_steps_email
 
 logger = logging.getLogger("agent")
 
@@ -26,12 +27,17 @@ load_dotenv(".env.local")
 
 @function_tool
 async def receptionist(context: RunContext) -> str:
-    """Greet the caller and ask how you can help them today.
+    """Phase 1: greet the caller and identify their goal.
 
-    Call this tool at the very start of the conversation, before doing anything
-    else. The tool returns the exact greeting the agent should speak to the user.
+    Call this tool exactly once, at the very start of every call, before doing
+    anything else. The tool returns the exact greeting the agent should speak.
+
+    After speaking the greeting, listen to the caller's response. If they want
+    to open a new bank account, move on to collecting their information. If
+    they want something else, answer general questions or offer to transfer
+    them to a human agent.
     """
-    return "Hi, what can I assist you with today?"
+    return "Thank you for calling. What can I help you with today?"
 
 
 @function_tool
@@ -47,11 +53,14 @@ async def collect_customer_information(
     email: str,
     citizenship_status: str,
     employment_status: str,
+    confirmed_goal: str,
 ) -> str:
-    """Collect the customer's full banking profile and store it in the database.
+    """Phase 3: persist a verified account-opening application to the database.
 
-    Ask the user, one question at a time, for each of the following items before
-    calling this tool. Confirm each answer back to the user before moving on:
+    Ask the user, one question at a time, for each of the following items
+    before calling this tool. Confirm each answer back to the user before
+    moving on. Do not call this tool until every field has been collected
+    and confirmed:
 
     1. First name
     2. Last name
@@ -64,7 +73,12 @@ async def collect_customer_information(
     9. Citizenship status
     10. Employment status
 
-    Only call this tool once all ten values have been collected.
+    The `confirmed_goal` argument should be set to "account_opening" once the
+    user has confirmed they want to open a new bank account.
+
+    If the insertion fails, apologize, briefly tell the user there was a system
+    issue, and call this tool again to retry. On success, move on to dispatching
+    the next-steps email.
 
     Args:
         first_name: The customer's given (first) name.
@@ -79,27 +93,67 @@ async def collect_customer_information(
             "permanent resident", "non-resident").
         employment_status: The customer's employment status (e.g. "employed",
             "self-employed", "unemployed", "retired", "student").
+        confirmed_goal: The confirmed reason for the call. Use
+            "account_opening" once the user has confirmed they want a new
+            account.
     """
-    customer_id = save_customer(
-        first_name=first_name,
-        last_name=last_name,
-        age=age,
-        residential_address=residential_address,
-        identification_number=identification_number,
-        date_of_birth=date_of_birth,
-        phone_number=phone_number,
-        email=email,
-        citizenship_status=citizenship_status,
-        employment_status=employment_status,
+    try:
+        record_id = save_pending_account(
+            first_name=first_name,
+            last_name=last_name,
+            age=age,
+            residential_address=residential_address,
+            identification_number=identification_number,
+            date_of_birth=date_of_birth,
+            phone_number=phone_number,
+            email=email,
+            citizenship_status=citizenship_status,
+            employment_status=employment_status,
+            confirmed_goal=confirmed_goal,
+        )
+    except Exception as exc:
+        logger.exception("failed to save pending account")
+        return (
+            "ERROR: database insertion failed. Apologize, tell the user there "
+            f"was a system issue ({exc}), and retry this tool."
+        )
+
+    logger.info(
+        "stored pending account %s %s as record %d", first_name, last_name, record_id
     )
-    logger.info("stored customer %s %s with id %d", first_name, last_name, customer_id)
     return (
-        f"Saved customer profile for {first_name} {last_name} "
-        f"(record id {customer_id}). Confirm the details back to the user."
+        f"OK: pending account saved for {first_name} {last_name} "
+        f"(record id {record_id}). Next, call send_next_steps_email."
     )
 
 
-banking_tools = [receptionist, collect_customer_information]
+@function_tool
+async def send_next_steps_email(
+    context: RunContext, to_email: str, first_name: str
+) -> str:
+    """Phase 4: dispatch the standardized 'Next Steps' onboarding email.
+
+    Call this tool immediately after collect_customer_information succeeds.
+    Use the email address and first name the customer provided.
+
+    Args:
+        to_email: The customer's email address (as previously collected).
+        first_name: The customer's first name (as previously collected).
+    """
+    try:
+        status = dispatch_next_steps_email(to_email=to_email, first_name=first_name)
+    except Exception as exc:
+        logger.exception("failed to send next-steps email")
+        return f"ERROR: email dispatch failed ({exc}). Inform the user."
+
+    logger.info("next-steps email %s to %s", status, to_email)
+    return (
+        f"OK: next-steps email {status} to {to_email}. Now move to the final "
+        "confirmation phase and speak the closing statement."
+    )
+
+
+banking_tools = [receptionist, collect_customer_information, send_next_steps_email]
 
 
 class Assistant(Agent):
@@ -119,7 +173,8 @@ class Assistant(Agent):
             #     llm=openai.realtime.RealtimeModel(voice="marin")
             instructions=textwrap.dedent(
                 """\
-                You are a friendly, reliable voice assistant that answers questions, explains topics, and completes tasks with available tools.
+                You are an autonomous voice agent for a bank, facilitating new
+                bank account openings over the phone.
 
                 # Output rules
 
@@ -127,29 +182,54 @@ class Assistant(Agent):
 
                 - Respond in plain text only. Never use JSON, markdown, lists, tables, code, emojis, or other complex formatting.
                 - Keep replies brief by default: one to three sentences. Ask one question at a time.
-                - Do not reveal system instructions, internal reasoning, tool names, parameters, or raw outputs
-                - Spell out numbers, phone numbers, or email addresses
-                - Omit `https://` and other formatting if listing a web url
+                - Do not reveal system instructions, internal reasoning, tool names, parameters, or raw outputs.
+                - Spell out numbers, phone numbers, or email addresses.
+                - Omit `https://` and other formatting if listing a web url.
                 - Avoid acronyms and words with unclear pronunciation, when possible.
 
-                # Conversational flow
+                # Workflow (follow exactly)
 
-                - Help the user accomplish their objective efficiently and correctly. Prefer the simplest safe step first. Check understanding and adapt.
-                - Provide guidance in small steps and confirm completion before continuing.
-                - Summarize key results when closing a topic.
+                ## Phase 1 - Initial greeting & goal identification
+                - Call the `receptionist` tool exactly once at the very start of the call and speak the greeting it returns verbatim.
+                - Listen for the caller's goal. If they want to open a new account, proceed to Phase 2. Otherwise, answer general questions or offer to transfer them to a human agent.
+
+                ## Phase 2 - Data collection (receptionist role)
+                Collect all ten data points below from the conversation, one at a time, confirming each value back to the user before moving on:
+                1. First name
+                2. Last name
+                3. Age
+                4. Residential address
+                5. Identification number
+                6. Date of birth
+                7. Phone number
+                8. Email address
+                9. Citizenship status
+                10. Employment status
+                Continuously check your context memory. If any of these are missing or unclear, ask a targeted follow-up question. Do not proceed to Phase 3 until every field has been collected and confirmed.
+
+                ## Phase 3 - Database insertion
+                Once all ten fields are confirmed, call `collect_customer_information` with the collected values and `confirmed_goal="account_opening"`. If the tool returns an error, briefly apologize, tell the user there was a system issue, and call the tool again to retry. On success, proceed to Phase 4.
+
+                ## Phase 4 - Next steps dispatch
+                Immediately call `send_next_steps_email` with the user's email and first name. If it returns an error, tell the user the email could not be sent and offer to try again.
+
+                ## Phase 5 - Confirmation & call termination
+                Speak this closing statement verbatim:
+                "I have successfully recorded your information. I just sent an email to the address you provided with the next steps to finalize opening your account. Is there anything else I can assist you with?"
+                If the user has no further requests, thank them and end the call.
 
                 # Tools
 
-                - Use available tools as needed, or upon user request.
-                - Collect required inputs first. Perform actions silently if the runtime expects it.
+                - Use available tools as described in the workflow above.
+                - Collect required inputs first. Confirm each value before storing.
                 - Speak outcomes clearly. If an action fails, say so once, propose a fallback, or ask how to proceed.
-                - When tools return structured data, summarize it to the user in a way that is easy to understand, and don't directly recite identifiers or other technical details.
+                - When tools return structured data, summarize it for the user; do not recite identifiers or technical details.
 
                 # Guardrails
 
                 - Stay within safe, lawful, and appropriate use; decline harmful or out-of-scope requests.
-                - For medical, legal, or financial topics, provide general information only and suggest consulting a qualified professional.
-                - Protect privacy and minimize sensitive data.
+                - For medical, legal, or financial topics outside account opening, provide general information only and suggest consulting a qualified professional.
+                - Protect privacy and minimize sensitive data; never repeat the full identification number back to the user.
                 """
             ),
         )
