@@ -17,9 +17,21 @@ from livekit.agents import (
 from livekit.plugins import ai_coustics, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
+from database import save_customer
+
 logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
+
+
+@function_tool
+async def receptionist(context: RunContext) -> str:
+    """Greet the caller and ask how you can help them today.
+
+    Call this tool at the very start of the conversation, before doing anything
+    else. The tool returns the exact greeting the agent should speak to the user.
+    """
+    return "Hi, what can I assist you with today?"
 
 
 @function_tool
@@ -28,45 +40,66 @@ async def collect_customer_information(
     first_name: str,
     last_name: str,
     age: int,
+    residential_address: str,
+    identification_number: str,
     date_of_birth: str,
-    security_question: str,
-    security_answer: str,
+    phone_number: str,
+    email: str,
+    citizenship_status: str,
+    employment_status: str,
 ) -> str:
-    """Collect identity and verification details from the customer for banking access.
+    """Collect the customer's full banking profile and store it in the database.
 
     Ask the user, one question at a time, for each of the following items before
     calling this tool. Confirm each answer back to the user before moving on:
 
-    1. Their first name
-    2. Their last name
-    3. Their current age
-    4. Their date of birth (spoken naturally, e.g. "March fifth, nineteen ninety")
-    5. A security question they would like on file (e.g. "What is your mother's maiden name?")
-    6. The answer to that security question
+    1. First name
+    2. Last name
+    3. Age
+    4. Residential address
+    5. Identification number (e.g. national ID, SSN, passport number)
+    6. Date of birth
+    7. Phone number
+    8. Email address
+    9. Citizenship status
+    10. Employment status
 
-    Only call this tool once you have collected all six values from the user.
+    Only call this tool once all ten values have been collected.
 
     Args:
         first_name: The customer's given (first) name.
         last_name: The customer's family (last) name.
         age: The customer's age in years.
+        residential_address: The customer's current residential address.
+        identification_number: A government-issued identification number.
         date_of_birth: The customer's date of birth as the user stated it.
-        security_question: The security question the user chose.
-        security_answer: The user's answer to their chosen security question.
+        phone_number: The customer's contact phone number.
+        email: The customer's contact email address.
+        citizenship_status: The customer's citizenship status (e.g. "US citizen",
+            "permanent resident", "non-resident").
+        employment_status: The customer's employment status (e.g. "employed",
+            "self-employed", "unemployed", "retired", "student").
     """
-    logger.info(
-        "collected customer information for %s %s (age %d)",
-        first_name,
-        last_name,
-        age,
+    customer_id = save_customer(
+        first_name=first_name,
+        last_name=last_name,
+        age=age,
+        residential_address=residential_address,
+        identification_number=identification_number,
+        date_of_birth=date_of_birth,
+        phone_number=phone_number,
+        email=email,
+        citizenship_status=citizenship_status,
+        employment_status=employment_status,
     )
+    logger.info("stored customer %s %s with id %d", first_name, last_name, customer_id)
     return (
-        f"Recorded customer profile for {first_name} {last_name}. "
-        "Confirm the details back to the user and let them know they are verified."
+        f"Saved customer profile for {first_name} {last_name} "
+        f"(record id {customer_id}). Confirm the details back to the user."
     )
 
 
-banking_tools = [collect_customer_information]
+banking_tools = [receptionist, collect_customer_information]
 
 
 class Assistant(Agent):
