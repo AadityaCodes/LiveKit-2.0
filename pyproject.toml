@@ -12,6 +12,7 @@ dependencies = [
     "livekit-agents[silero,turn-detector]==1.5.16",
     "livekit-plugins-ai-coustics~=0.2",
     "python-dotenv",
+    "onnxruntime<=1.19.2"
 ]
 
 [dependency-groups]
@@ -25,6 +26,7 @@ dev = [
 # yarl 1.24.1 was published with only a cp310 wheel and no sdist, so it can't
 # install on Python 3.11+. Remove this once upstream uploads the remaining wheels.
 constraint-dependencies = ["yarl<1.24"]
+override-dependencies = ["onnxruntime<=1.19.2"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
