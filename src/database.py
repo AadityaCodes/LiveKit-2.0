@@ -20,7 +20,7 @@ def init_db() -> None:
     with _connect() as conn:
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS pending_accounts (
+            CREATE TABLE IF NOT EXISTS pending_customers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 first_name TEXT NOT NULL,
                 last_name TEXT NOT NULL,
@@ -33,13 +33,16 @@ def init_db() -> None:
                 citizenship_status TEXT NOT NULL,
                 employment_status TEXT NOT NULL,
                 confirmed_goal TEXT NOT NULL,
+                account_number TEXT,
+                routing_number TEXT,
+                provisioned_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
 
 
-def save_pending_account(
+def save_pending_customer(
     *,
     first_name: str,
     last_name: str,
@@ -57,7 +60,7 @@ def save_pending_account(
     with _connect() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO pending_accounts (
+            INSERT INTO pending_customers (
                 first_name, last_name, age, residential_address,
                 identification_number, date_of_birth, phone_number, email,
                 citizenship_status, employment_status, confirmed_goal
@@ -78,3 +81,21 @@ def save_pending_account(
             ),
         )
         return cursor.lastrowid
+
+
+def attach_account_numbers(
+    *, customer_id: int, account_number: str, routing_number: str
+) -> None:
+    with _connect() as conn:
+        result = conn.execute(
+            """
+            UPDATE pending_customers
+            SET account_number = ?,
+                routing_number = ?,
+                provisioned_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (account_number, routing_number, customer_id),
+        )
+        if result.rowcount == 0:
+            raise ValueError(f"no pending_customers row with id={customer_id}")
