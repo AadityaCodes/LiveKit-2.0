@@ -1,3 +1,18 @@
+"""Welcome-email dispatch.
+
+Composes and sends the Phase 6 "Welcome / Next Steps" email that contains
+the newly provisioned Account ID, routing number, login URL, and a fresh
+temporary password.
+
+If ``SMTP_HOST`` is configured the message is sent via SMTP; otherwise
+the email body is logged so the local dev/eval flow can complete without
+real email infrastructure.
+
+Environment overrides:
+  SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASSWORD / SMTP_FROM
+  ABC_BANK_LOGIN_URL — link shown in the welcome email body
+"""
+
 import logging
 import os
 import secrets
@@ -39,6 +54,7 @@ The ABC Bank Onboarding Team
 
 
 def _generate_temp_password(length: int = 12) -> str:
+    """Return a cryptographically random alphanumeric temporary password."""
     alphabet = string.ascii_letters + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(length))
 

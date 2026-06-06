@@ -12,7 +12,8 @@ dependencies = [
     "livekit-agents[silero,turn-detector]==1.5.16",
     "livekit-plugins-ai-coustics~=0.2",
     "python-dotenv",
-    "onnxruntime<=1.19.2"
+    "onnxruntime<=1.19.2",
+    "google-genai>=1.0",
 ]
 
 [dependency-groups]
