@@ -36,6 +36,7 @@ from livekit.agents import (
 from livekit.plugins import ai_coustics, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
+from analytics import run_post_call_analytics
 from call_logger import register_call_logger
 from core_banking import create_bank_account
 from database import save_pending_customer
@@ -455,6 +456,18 @@ async def my_agent(ctx: JobContext) -> None:
             logger.exception("post-call eval failed")
 
     ctx.add_shutdown_callback(_run_eval_on_shutdown)
+
+    # Run the customer-insights analytics extraction in parallel with the
+    # eval. Both read the same transcript but write to different sinks
+    # (eval -> evals/*.md, analytics -> analytics/*.json + SQLite).
+    async def _run_analytics_on_shutdown() -> None:
+        """Shutdown callback: extract structured customer insights for CRM."""
+        try:
+            await run_post_call_analytics(transcript_path)
+        except Exception:
+            logger.exception("post-call analytics failed")
+
+    ctx.add_shutdown_callback(_run_analytics_on_shutdown)
 
     # Start the session, which initializes the voice pipeline and warms
     # up the models. Background noise cancellation is applied to inbound
