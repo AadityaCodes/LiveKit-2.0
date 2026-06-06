@@ -1,30 +1,39 @@
 """Post-call evaluation.
 
-After a call closes, we feed the transcript to an LLM "judge" that scores
+After a call closes, we feed the transcript to a Gemini "judge" that scores
 how well the agent followed the workflow + guardrails and writes a
 Markdown report under ``evals/``.
 
-This is intentionally provider-agnostic: the judge uses the same LiveKit
-Inference LLM the agent itself uses, so no extra API keys are needed.
+The judge uses Google's Gemini API directly (via the ``google-genai`` SDK),
+authenticated with the ``GOOGLE_GEMINI_API_KEY`` environment variable
+(loaded from ``.env.local`` by the main agent entrypoint). This keeps the
+eval pipeline independent from the agent's own LLM provider.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 
-from livekit.agents import inference, llm
+from google import genai
+from google.genai import types
 
 logger = logging.getLogger("eval_runner")
 
 # Directory where eval reports land.
 EVALS_DIR = Path("evals")
 
-# We use a smaller/faster judge model than the agent's main LLM.
-_JUDGE_MODEL = "openai/gpt-4.1-mini"
+# Gemini model used for the judge. Flash is fast and cheap; quality is fine
+# for a structured scoring task with a long-but-focused prompt.
+_JUDGE_MODEL = os.getenv("GEMINI_JUDGE_MODEL", "gemini-flash-latest")
+
+# Env var that holds the Gemini API key. The agent's main entrypoint loads
+# .env.local at import time so this is populated by the time we read it.
+_GEMINI_KEY_ENV = "GOOGLE_GEMINI_API_KEY"
 
 _JUDGE_PROMPT = textwrap.dedent(
     """\
@@ -104,10 +113,10 @@ def _load_transcript(path: Path) -> str:
 
 
 async def run_post_call_eval(transcript_path: Path) -> Path | None:
-    """Read the call's transcript, run an LLM judge, and write a Markdown report.
+    """Read the call's transcript, run the Gemini judge, and write a Markdown report.
 
-    Returns the report path on success, or None if the transcript was empty
-    or the eval failed.
+    Returns the report path on success, or ``None`` if the transcript was
+    empty, the API key wasn't configured, or the API call failed.
     """
     EVALS_DIR.mkdir(parents=True, exist_ok=True)
     transcript = _load_transcript(transcript_path)
@@ -115,31 +124,38 @@ async def run_post_call_eval(transcript_path: Path) -> Path | None:
         logger.warning("eval skipped: empty transcript at %s", transcript_path)
         return None
 
-    # Build a 2-message chat context: system (judge prompt) + user (transcript).
-    chat_ctx = llm.ChatContext()
-    chat_ctx.add_message(role="system", content=_JUDGE_PROMPT)
-    chat_ctx.add_message(
-        role="user",
-        content=(
-            "Transcript of one full call follows, one JSON event per line:\n\n"
-            f"{transcript}\n\n"
-            "Produce the Markdown report now."
-        ),
+    api_key = os.getenv(_GEMINI_KEY_ENV)
+    if not api_key:
+        logger.warning(
+            "eval skipped: %s is not set; cannot reach Gemini", _GEMINI_KEY_ENV
+        )
+        return None
+
+    # Create a fresh client per call. The SDK is light and this keeps the
+    # eval pipeline stateless / easy to reason about.
+    client = genai.Client(api_key=api_key)
+    user_prompt = (
+        "Transcript of one full call follows, one JSON event per line:\n\n"
+        f"{transcript}\n\n"
+        "Produce the Markdown report now."
     )
 
-    judge = inference.LLM(model=_JUDGE_MODEL)
-    chunks: list[str] = []
     try:
-        async with judge.chat(chat_ctx=chat_ctx) as stream:
-            async for chunk in stream:
-                # Each chunk has .delta.content with the next piece of text.
-                if chunk.delta and chunk.delta.content:
-                    chunks.append(chunk.delta.content)
+        response = await client.aio.models.generate_content(
+            model=_JUDGE_MODEL,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=_JUDGE_PROMPT,
+                # Low temperature: we want a consistent, deterministic
+                # scoring report, not creative writing.
+                temperature=0.2,
+            ),
+        )
     except Exception:
         logger.exception("judge LLM failed for transcript %s", transcript_path)
         return None
 
-    report = "".join(chunks).strip()
+    report = (response.text or "").strip()
     if not report:
         logger.warning("judge LLM returned empty report for %s", transcript_path)
         return None

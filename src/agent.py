@@ -420,13 +420,13 @@ async def my_agent(ctx: JobContext) -> None:
         # Speech-to-text: caller audio in -> text out. Deepgram Nova-3
         # (multilingual) is high-accuracy on names and numbers.
         stt=inference.STT(model="deepgram/nova-3", language="multi"),
-        # Text-to-speech: text out -> caller audio in. Cartesia Sonic-3.
-        # We pass extra_kwargs to slow the voice down for clarity over
-        # phone lines (cf. Cartesia API: "slow"/"normal"/"fast" or float).
+        # Text-to-speech: text out -> caller audio in. Cartesia Sonic-3,
+        # at normal pace (Cartesia accepts "slow" / "normal" / "fast" or a
+        # float multiplier).
         tts=inference.TTS(
             model="cartesia/sonic-3",
             voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
-            extra_kwargs={"speed": "slow"},
+            extra_kwargs={"speed": "normal"},
         ),
         # Turn detection decides when the caller has finished speaking so
         # the agent knows when to take its turn.
