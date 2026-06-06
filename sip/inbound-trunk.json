@@ -1,0 +1,7 @@
+{
+  "name": "ABC Bank inbound trunk",
+  "numbers": ["REPLACE_WITH_YOUR_E164_NUMBER_E_G_+15551234567"],
+  "allowed_addresses": [],
+  "auth_username": "",
+  "auth_password": ""
+}

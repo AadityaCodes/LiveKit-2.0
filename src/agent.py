@@ -240,6 +240,24 @@ class Assistant(Agent):
     tool registry. One ``Assistant`` instance is created per call.
     """
 
+    async def on_enter(self) -> None:
+        """Speak first when joining a call.
+
+        Inbound telephony callers expect the agent to greet them as soon
+        as the line opens; they aren't going to say "hello" first. This
+        hook fires once the agent has joined the room, so we ask the LLM
+        to deliver the Phase 1 greeting verbatim. The system prompt
+        already pins the exact wording.
+        """
+        await self.session.generate_reply(
+            instructions=(
+                "Open the call by speaking the Phase 1 greeting from your "
+                "system prompt VERBATIM and then waiting for the caller's "
+                "reply. Do not add anything before or after the scripted "
+                "greeting."
+            )
+        )
+
     def __init__(self) -> None:
         super().__init__(
             tools=banking_tools,

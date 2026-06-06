@@ -1,0 +1,14 @@
+{
+  "name": "ABC Bank agent dispatch",
+  "trunk_ids": ["REPLACE_WITH_TRUNK_ID_FROM_INBOUND_TRUNK_CREATION"],
+  "rule": {
+    "dispatchRuleIndividual": {
+      "roomPrefix": "abcbank-call-"
+    }
+  },
+  "room_config": {
+    "agents": [
+      { "agent_name": "my-agent" }
+    ]
+  }
+}
