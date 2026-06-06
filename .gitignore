@@ -32,3 +32,5 @@ KMS
 # GitHub CLI
 .github/personal-instructions.md
 banking.db
+transcripts/
+evals/
